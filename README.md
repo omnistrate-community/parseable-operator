@@ -14,7 +14,7 @@ Parseable Operator is a Kubernetes operator for deploying, scaling, and operatin
 
 Each `ParseableCluster` is composed of `nodes` (logical groups by `type: ingestor | query | prism`), `k8sConfig` (image, resources, volumes, services, affinity, etc.), `parseableConfig` (env secret + CLI args), and a `deploymentOrder`. On reconcile ([internal/parseablecluster_controller/reconciler.go](internal/parseablecluster_controller/reconciler.go)) the controller builds the desired StatefulSet/Service objects ([pkg/objects/objects.go](pkg/objects/objects.go)), diffs them via a hash annotation, and rolls node groups out sequentially in `deploymentOrder` on upgrades. A `deletepvc.finalizers.parseable.com` finalizer ensures StatefulSets are removed before their PVCs on delete. If autoscaling is active for a node group, the base controller defers to the autoscaler instead of overwriting replica counts.
 
-**Suspend / resume**: annotate with `parseable.com/workspace=suspend` (or `suspend-ingestor` / `suspend-querier`) to scale matching workloads to 0, and `resume*` (or remove the annotation) to restore them. See [docs/suspend-resume-usage.md](docs/suspend-resume-usage.md) for the full reference.
+**Suspend / resume**: annotate with `parseable.com/workspace=suspend` (or `suspend-ingestor` / `suspend-querier`) to scale matching workloads to 0, and `resume` / `resume-ingestor` / `resume-querier` to restore them. See [Suspending/resuming a workspace](#suspendingresuming-a-workspace) below for the full reference.
 
 **Volume expansion**: growing a `volumeClaimTemplate` size is detected on reconcile ([internal/parseablecluster_controller/volume_expansion.go](internal/parseablecluster_controller/volume_expansion.go)) and applied via PVC patch + orphan-delete/recreate of the StatefulSet, if the `StorageClass` allows expansion. Shrinking is rejected.
 
@@ -42,51 +42,92 @@ pkg/
   scaler/                                # scaling decision + StatefulSet add/remove
   utils/                                 # generic patch/status helpers
 config/
-  crd/bases/, samples/                   # generated CRDs + example CRs
-helm/
-  parseable-operator/                    # chart to install the Parseable operator
-  parseable-cr/                          # chart to install a ParseableCluster via templated CR
-docs/                                    # usage guides
+  crd/bases/                             # generated CRDs
 ```
 
 ## Prerequisites
 
 - A Kubernetes cluster (kubectl configured) — go.mod targets client libraries for k8s 1.30.
-- [Helm](https://helm.sh/) 3.x
 - An S3-compatible object store (MinIO, AWS S3, DO Spaces, GCS, etc.) for Parseable's storage backend.
 - [metrics-server](https://github.com/kubernetes-sigs/metrics-server) if using `ParseableClusterAutoscaler` or `ParseableClusterChaos` (both read `metrics.k8s.io`).
-- Go 1.25+ and Docker, only if building the operator image yourself.
+- Go 1.25+ (and Docker, only if building the operator image yourself).
 
 ## Installing the operator
 
+The repo currently ships only the generated CRDs ([config/crd/bases](config/crd/bases)) and the controller source — there is no packaged Helm chart or kustomize deployment overlay checked in yet. To run the operator:
+
 ```bash
-kubectl create ns parseable-operator
-cd helm/parseable-operator
-helm upgrade --install parseable-operator . -n parseable-operator
+# apply the CRDs
+kubectl apply -f config/crd/bases
+
+# build and run the controller-manager
+make build
+./bin/manager   # or `make run` to run against your current kubeconfig without building a binary
 ```
 
-Environment-specific value overrides are in `values-staging.yaml` / `values-production.yaml` (set `image.repository`/`tag` to your own operator image).
+To run it in-cluster, build and push an image (see [Building the operator image](#building-the-operator-image)) and deploy it with a Deployment/RBAC of your own, granting it access to the three CRDs plus `metrics.k8s.io` (if autoscaling/chaos are used) and `apps`/`core` resources it manages (StatefulSets, Deployments, Services, PVCs).
 
 ## Deploying a Parseable cluster
 
 1. **Provision object storage** — for local/dev, MinIO works well; for production point at S3/GCS/etc.
-2. **Create the Parseable env secret** (object-store credentials + config), e.g. from [config/samples/parseable-env-secret](config/samples/parseable-env-secret):
+2. **Create the Parseable env secret** (object-store credentials + config) referenced by `spec.parseableConfig[].secretName`:
    ```bash
    kubectl create ns pbc-1
-   kubectl create secret generic parseable-env-secret --from-env-file=config/samples/parseable-env-secret -n pbc-1
+   kubectl create secret generic parseable-env-secret --from-env-file=<your-env-file> -n pbc-1
    ```
-3. **Apply a `ParseableCluster` CR**, e.g. [config/samples/pb-cr-sample.yaml](config/samples/pb-cr-sample.yaml), or use the [helm/parseable-cr](helm/parseable-cr) chart (also supports `database.connectionString` and per-cloud overlays under `cloud/` / `components/`).
-4. **(Optional, alpha) Enable autoscaling** — install `metrics-server`, then apply an autoscaler CR such as [config/samples/pb-cr-scaler.yaml](config/samples/pb-cr-scaler.yaml).
-5. **(Optional, alpha) Enable chaos testing** of node churn with [config/samples/pb-chaos.yaml](config/samples/pb-chaos.yaml).
+3. **Apply a `ParseableCluster` CR** — hand-write one against the schema in [config/crd/bases/parseable.com_parseableclusters.yaml](config/crd/bases/parseable.com_parseableclusters.yaml) and the field reference below.
+4. **(Optional, alpha) Enable autoscaling** — install `metrics-server`, then apply a `ParseableClusterAutoscaler` CR targeting it via `spec.scaleTargetRef`.
+5. **(Optional, alpha) Enable chaos testing** of node churn with a `ParseableClusterChaos` CR.
 
 ### Suspending/resuming a workspace
 
+The Parseable operator supports suspending and resuming workspaces using the `parseable.com/workspace` annotation on a `ParseableCluster`.
+
+**Full workspace suspension** — suspend all components (query, ingestor, prism):
+
 ```bash
 kubectl annotate parseablecluster <name> -n <namespace> parseable.com/workspace=suspend
+```
+
+Resume all components:
+
+```bash
 kubectl annotate parseablecluster <name> -n <namespace> parseable.com/workspace=resume --overwrite
 ```
 
-See [docs/suspend-resume-usage.md](docs/suspend-resume-usage.md) for ingestor-only/querier-only suspension and the full annotation reference.
+**Ingestor-only suspension** — suspend only ingestor nodes while keeping query and prism running:
+
+```bash
+kubectl annotate parseablecluster <name> -n <namespace> parseable.com/workspace=suspend-ingestor
+```
+
+Resume only ingestor nodes:
+
+```bash
+kubectl annotate parseablecluster <name> -n <namespace> parseable.com/workspace=resume-ingestor --overwrite
+```
+
+**Querier-only suspension** — suspend only querier nodes while keeping ingestor and prism running:
+
+```bash
+kubectl annotate parseablecluster <name> -n <namespace> parseable.com/workspace=suspend-querier
+```
+
+Resume only querier nodes:
+
+```bash
+kubectl annotate parseablecluster <name> -n <namespace> parseable.com/workspace=resume-querier --overwrite
+```
+
+Always resume by setting the annotation to the matching `resume*` value shown above, not by deleting the `parseable.com/workspace` annotation outright. The controller only restores replicas when it sees an explicit `resume` / `resume-ingestor` / `resume-querier` value; simply removing the annotation does not reliably trigger a resume, since the normal reconcile loop skips re-applying a StatefulSet's replica count when the CR spec itself hasn't changed.
+
+**Implementation details:**
+
+- **Full suspension (`suspend`)**: Scales all StatefulSets/Deployments to 0 and stores each object's original replica count in a `parseable.com/original-replicas` annotation on that object.
+- **Ingestor suspension (`suspend-ingestor`)**: Only scales down components with "ingestor" in their name.
+- **Querier suspension (`suspend-querier`)**: Only scales down StatefulSets whose name contains `parseable-query`.
+- **Resume (`resume`)**: Restores components to the replica count stored in their `parseable.com/original-replicas` annotation, then removes it.
+- **Resume (`resume-ingestor` / `resume-querier`)**: Restores components to the replica count from `spec.nodes[].replicas` in the `ParseableCluster` CR (no per-object stored-state annotation is used for these).
 
 ## Configuration reference
 
@@ -132,8 +173,7 @@ See [docs/suspend-resume-usage.md](docs/suspend-resume-usage.md) for ingestor-on
 | `PB_RECONCILE_WAIT` | `10s` | Requeue interval for the `ParseableCluster` controller. |
 | `PB_AUTOSCALER_RECONCILE_WAIT` | `20s` | Requeue interval for the `ParseableClusterAutoscaler` controller. |
 | `PB_CHAOS_RECONCILE_WAIT` | `20s` | Requeue interval for the `ParseableClusterChaos` controller. |
-| `WATCH_NAMESPACE` | *(all namespaces)* | Restrict the operator to one or more comma-separated namespaces. |
-| `DENY_LIST` | *(chart-defined)* | Namespaces the operator should never reconcile in. |
+| `DENY_LIST` | *(none)* | Comma-separated namespaces the `ParseableCluster` controller should never reconcile. |
 
 ## Development
 
