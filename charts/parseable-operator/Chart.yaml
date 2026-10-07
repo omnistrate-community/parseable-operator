@@ -4,6 +4,6 @@ description: Kubernetes operator for Parseable Enterprise clusters (ParseableClu
 type: application
 version: 0.1.0
 appVersion: "edge"
-home: https://github.com/parseablehq/parseable-operator
+home: https://github.com/omnistrate-community/parseable-operator
 sources:
-  - https://github.com/parseablehq/parseable-operator
+  - https://github.com/omnistrate-community/parseable-operator

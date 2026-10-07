@@ -1,5 +1,5 @@
 image:
-  repository: quay.io/parseablehq/parseable-operator
+  repository: ghcr.io/omnistrate-community/parseable-operator
   # Defaults to the chart appVersion.
   tag: ""
   pullPolicy: IfNotPresent

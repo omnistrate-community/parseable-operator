@@ -13,16 +13,17 @@ the customer's account.
 
 ## 1. Publish the operator image and chart
 
-Tagging a release builds `quay.io/parseablehq/parseable-operator:<tag>`
-(amd64 + arm64) and pushes the chart to `oci://quay.io/parseablehq/charts`:
+Tagging a release on the omnistrate-community fork builds
+`ghcr.io/omnistrate-community/parseable-operator:<tag>` (amd64 + arm64) and
+pushes the chart to `oci://ghcr.io/omnistrate-community/charts`:
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
 The chart version is the tag without `v`; keep `ChartVersion` in
-`cell-amenities-aws.yaml` in sync. Make sure the `charts` repository on Quay is
-public, or that cells can pull it.
+`cell-amenities-aws.yaml` in sync. Both GHCR packages must be public so
+deployment cells can pull them anonymously.
 
 ## 2. Install the operator on deployment cells
 

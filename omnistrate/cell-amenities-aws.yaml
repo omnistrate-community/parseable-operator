@@ -16,8 +16,8 @@ customAmenities:
     properties:
       ChartName: parseable-operator
       ChartVersion: 0.1.0
-      ChartRepoName: parseablehq
-      ChartRepoURL: oci://quay.io/parseablehq/charts
+      ChartRepoName: omnistrate-community
+      ChartRepoURL: oci://ghcr.io/omnistrate-community/charts
       DefaultNamespace: parseable-system
       ChartValues:
         priorityClassName: system-cluster-critical
