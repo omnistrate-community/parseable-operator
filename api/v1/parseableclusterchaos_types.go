@@ -32,6 +32,7 @@ type ParseableClusterChaosStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=pbcc;pbccs
 
 type ParseableClusterChaos struct {
 	metav1.TypeMeta   `json:",inline"`

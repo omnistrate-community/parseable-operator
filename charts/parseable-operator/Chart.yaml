@@ -1,0 +1,9 @@
+apiVersion: v2
+name: parseable-operator
+description: Kubernetes operator for Parseable Enterprise clusters (ParseableCluster, ParseableClusterAutoscaler, ParseableClusterChaos).
+type: application
+version: 0.1.0
+appVersion: "edge"
+home: https://github.com/parseablehq/parseable-operator
+sources:
+  - https://github.com/parseablehq/parseable-operator

@@ -1,0 +1,51 @@
+image:
+  repository: quay.io/parseablehq/parseable-operator
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+replicaCount: 1
+
+# Leader election is required when replicaCount > 1.
+leaderElection: true
+
+# Comma-separated namespaces the operator must ignore.
+denyList: ""
+
+# Reconcile intervals (Go durations).
+reconcileWait: 10s
+autoscalerReconcileWait: ""
+chaosReconcileWait: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+priorityClassName: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]

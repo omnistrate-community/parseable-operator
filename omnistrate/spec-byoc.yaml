@@ -1,0 +1,1027 @@
+# yaml-language-server: $schema=https://api.omnistrate.cloud/2022-09-01-00/schema/service-spec-schema.json
+#
+# Parseable Enterprise — BYOC (customer AWS accounts).
+#
+# Topology per instance (namespace instance-<id> in the customer's cell):
+#   parseableStorage  internal Terraform resource: S3 bucket + scoped IAM user
+#                     + cluster secret, all in the customer's AWS account
+#   parseableCluster  ParseableCluster CR reconciled by the parseable-operator,
+#                     which is installed once per deployment cell as a custom
+#                     amenity (see cell-amenities-aws.yaml), not by this plan
+#
+# Public endpoints are nginx Ingresses created by the workflows, using the
+# per-instance google-public-ca-tls certificate Omnistrate issues:
+#   ui      $sys.network.externalClusterEndpoint          -> prism (UI + query API)
+#   ingest  ingest-$sys.network.externalClusterEndpoint   -> ingestors
+
+name: Parseable BYOC
+tenancyType: CUSTOM_TENANCY
+deployment:
+  byoaDeployment:
+    # The AWS account config designated as the "Control Plane" account.
+    awsAccountId: "541226919566"
+    awsBootstrapRoleAccountArn: "arn:aws:iam::541226919566:role/omnistrate-bootstrap-role"
+
+features:
+  INTERNAL:
+    logs:
+  CUSTOMER:
+    logs:
+  # Permissions for the parseableStorage Terraform stack in customer accounts.
+  # Changing this regenerates the customer onboarding CloudFormation stack.
+  CUSTOM_TERRAFORM_POLICY:
+    policies:
+      aws: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:CreateBucket",
+                "s3:DeleteBucket",
+                "s3:ListBucket",
+                "s3:ListBucketVersions",
+                "s3:GetBucket*",
+                "s3:PutBucket*",
+                "s3:DeleteBucketPolicy",
+                "s3:GetEncryptionConfiguration",
+                "s3:PutEncryptionConfiguration",
+                "s3:GetAccelerateConfiguration",
+                "s3:GetLifecycleConfiguration",
+                "s3:GetReplicationConfiguration",
+                "s3:DeleteObject",
+                "s3:DeleteObjectVersion"
+              ],
+              "Resource": [
+                "arn:aws:s3:::parseable-*",
+                "arn:aws:s3:::parseable-*/*"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "iam:CreateUser",
+                "iam:DeleteUser",
+                "iam:GetUser",
+                "iam:TagUser",
+                "iam:UntagUser",
+                "iam:ListUserTags",
+                "iam:PutUserPolicy",
+                "iam:GetUserPolicy",
+                "iam:DeleteUserPolicy",
+                "iam:ListUserPolicies",
+                "iam:ListAttachedUserPolicies",
+                "iam:ListGroupsForUser",
+                "iam:CreateAccessKey",
+                "iam:DeleteAccessKey",
+                "iam:ListAccessKeys"
+              ],
+              "Resource": "arn:aws:iam::*:user/parseable-*"
+            }
+          ]
+        }
+
+services:
+  - name: parseableStorage
+    description: Per-instance S3 bucket, scoped IAM credentials and cluster secret.
+    internal: true
+    terraformConfigurations:
+      configurationPerCloudProvider:
+        aws:
+          terraformPath: /
+          artifactRelativePath: terraform/aws
+
+  - name: parseableCluster
+    description: Parseable Enterprise cluster (prism, queriers, ingestors) managed by the parseable-operator.
+    dependsOn:
+      - parseableStorage
+    compute:
+      instanceTypes:
+        - apiParam: instanceType
+          cloudProvider: aws
+    operatorCRDConfiguration:
+      helmChartDependencies: []
+    endpointConfiguration:
+      ui:
+        host: "$sys.network.externalClusterEndpoint"
+        ports:
+          - 443
+        primary: true
+        networkingType: PUBLIC
+      ingest:
+        host: "ingest-{{ $sys.network.externalClusterEndpoint }}"
+        ports:
+          - 443
+        primary: false
+        networkingType: PUBLIC
+    apiParameters:
+      - key: instanceType
+        name: Instance Type
+        description: EC2 instance type for the Parseable node group (x86_64).
+        type: String
+        modifiable: true
+        required: false
+        export: true
+        defaultValue: "m6i.xlarge"
+        options:
+          - m6i.large
+          - m6i.xlarge
+          - m6i.2xlarge
+          - m6i.4xlarge
+          - r6i.xlarge
+          - r6i.2xlarge
+      - key: parseableVersion
+        name: Parseable Version
+        description: Parseable Enterprise image tag.
+        type: String
+        modifiable: true
+        required: false
+        export: true
+        defaultValue: "v3.2.3"
+      - key: ingestorCount
+        name: Ingestor Count
+        description: Number of ingestor nodes.
+        type: Float64
+        modifiable: true
+        required: false
+        export: true
+        defaultValue: "2"
+        limits:
+          min: 1
+          max: 20
+      - key: querierCount
+        name: Querier Count
+        description: Number of querier nodes behind prism.
+        type: Float64
+        modifiable: true
+        required: false
+        export: true
+        defaultValue: "1"
+        limits:
+          min: 1
+          max: 10
+      - key: ingestorStagingSize
+        name: Ingestor Staging Volume
+        description: Per-ingestor staging volume size, e.g. 20Gi.
+        type: String
+        modifiable: false
+        required: false
+        export: true
+        defaultValue: "20Gi"
+        regex: "^[1-9][0-9]*Gi$"
+      - key: adminUsername
+        name: Admin Username
+        description: Username of the Parseable admin user.
+        type: String
+        modifiable: false
+        required: false
+        export: true
+        defaultValue: "admin"
+        regex: "^[A-Za-z][A-Za-z0-9_-]{2,31}$"
+      - key: adminPassword
+        name: Admin Password
+        description: 12-64 characters; letters, digits and !@#%^*_+=.,-
+        type: Password
+        modifiable: false
+        required: true
+        export: false
+        regex: "^[A-Za-z0-9!@#%^*_+=.,-]{12,64}$"
+      - key: licenseData
+        name: License Data
+        description: Base64 of parseable_license.json.
+        type: Password
+        modifiable: true
+        required: true
+        export: false
+        regex: "^[A-Za-z0-9+/=]+$"
+      - key: licenseSignature
+        name: License Signature
+        description: Base64 of parseable_license.sig.
+        type: Password
+        modifiable: true
+        required: true
+        export: false
+        regex: "^[A-Za-z0-9+/=]+$"
+
+    systemWorkflows:
+      create:
+        outputParameters:
+          phase: "$tasks.applycluster.resource.status.phase"
+          readyReplicas: "$tasks.applycluster.resource.status.readyReplicas"
+        workflow: &applyWorkflow
+          entrypoint: apply
+          arguments:
+            parameters:
+              - name: namespace
+                value: "{{ $sys.namespace }}"
+              - name: instanceId
+                value: "{{ $sys.instanceId }}"
+              - name: region
+                value: "{{ $sys.deploymentCell.region }}"
+              - name: instanceType
+                value: "{{ $sys.compute.node.instanceType }}"
+              - name: resourceId
+                value: "{{ $sys.deployment.resourceID }}"
+              - name: uiHost
+                value: "{{ $sys.network.externalClusterEndpoint }}"
+              - name: ingestHost
+                value: "ingest-{{ $sys.network.externalClusterEndpoint }}"
+              - name: parseableVersion
+                value: "{{ $var.parseableVersion }}"
+              - name: ingestorCount
+                value: "{{ $var.ingestorCount }}"
+              - name: querierCount
+                value: "{{ $var.querierCount }}"
+              - name: ingestorStagingSize
+                value: "{{ $var.ingestorStagingSize }}"
+              - name: adminUsername
+                value: "{{ $var.adminUsername }}"
+              - name: adminPassword
+                value: "{{ $var.adminPassword }}"
+              - name: licenseData
+                value: "{{ $var.licenseData }}"
+              - name: licenseSignature
+                value: "{{ $var.licenseSignature }}"
+              - name: s3Bucket
+                value: "{{ $parseableStorage.out.bucket }}"
+              - name: s3Region
+                value: "{{ $parseableStorage.out.region }}"
+              - name: s3Url
+                value: "{{ $parseableStorage.out.s3_url }}"
+              - name: s3AccessKey
+                value: "{{ $parseableStorage.out.access_key_id }}"
+              - name: s3SecretKey
+                value: "{{ $parseableStorage.out.secret_access_key }}"
+              - name: clusterSecret
+                value: "{{ $parseableStorage.out.cluster_secret }}"
+          templates:
+            - name: apply
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+                  - name: region
+                  - name: instanceType
+                  - name: resourceId
+                  - name: uiHost
+                  - name: ingestHost
+                  - name: parseableVersion
+                  - name: ingestorCount
+                  - name: querierCount
+                  - name: ingestorStagingSize
+                  - name: adminUsername
+                  - name: adminPassword
+                  - name: licenseData
+                  - name: licenseSignature
+                  - name: s3Bucket
+                  - name: s3Region
+                  - name: s3Url
+                  - name: s3AccessKey
+                  - name: s3SecretKey
+                  - name: clusterSecret
+              dag:
+                tasks:
+                  - name: applyenvsecret
+                    template: apply-env-secret
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: adminUsername
+                          value: "{{inputs.parameters.adminUsername}}"
+                        - name: adminPassword
+                          value: "{{inputs.parameters.adminPassword}}"
+                        - name: s3Bucket
+                          value: "{{inputs.parameters.s3Bucket}}"
+                        - name: s3Region
+                          value: "{{inputs.parameters.s3Region}}"
+                        - name: s3Url
+                          value: "{{inputs.parameters.s3Url}}"
+                        - name: s3AccessKey
+                          value: "{{inputs.parameters.s3AccessKey}}"
+                        - name: s3SecretKey
+                          value: "{{inputs.parameters.s3SecretKey}}"
+                        - name: clusterSecret
+                          value: "{{inputs.parameters.clusterSecret}}"
+                  - name: applylicense
+                    template: apply-license-secret
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: licenseData
+                          value: "{{inputs.parameters.licenseData}}"
+                        - name: licenseSignature
+                          value: "{{inputs.parameters.licenseSignature}}"
+                  - name: applycluster
+                    template: apply-cluster
+                    dependencies:
+                      - applyenvsecret
+                      - applylicense
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: instanceId
+                          value: "{{inputs.parameters.instanceId}}"
+                        - name: region
+                          value: "{{inputs.parameters.region}}"
+                        - name: instanceType
+                          value: "{{inputs.parameters.instanceType}}"
+                        - name: resourceId
+                          value: "{{inputs.parameters.resourceId}}"
+                        - name: parseableVersion
+                          value: "{{inputs.parameters.parseableVersion}}"
+                        - name: ingestorCount
+                          value: "{{inputs.parameters.ingestorCount}}"
+                        - name: querierCount
+                          value: "{{inputs.parameters.querierCount}}"
+                        - name: ingestorStagingSize
+                          value: "{{inputs.parameters.ingestorStagingSize}}"
+                  - name: applyuiingress
+                    template: apply-ui-ingress
+                    dependencies:
+                      - applycluster
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: uiHost
+                          value: "{{inputs.parameters.uiHost}}"
+                  - name: applyingestingress
+                    template: apply-ingest-ingress
+                    dependencies:
+                      - applycluster
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: ingestHost
+                          value: "{{inputs.parameters.ingestHost}}"
+
+            - name: apply-env-secret
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: adminUsername
+                  - name: adminPassword
+                  - name: s3Bucket
+                  - name: s3Region
+                  - name: s3Url
+                  - name: s3AccessKey
+                  - name: s3SecretKey
+                  - name: clusterSecret
+              resource:
+                action: apply
+                manifest: |
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: parseable-env-secret
+                    namespace: "{{inputs.parameters.namespace}}"
+                  type: Opaque
+                  stringData:
+                    addr: "0.0.0.0:8000"
+                    username: "{{inputs.parameters.adminUsername}}"
+                    password: "{{inputs.parameters.adminPassword}}"
+                    s3.url: "{{inputs.parameters.s3Url}}"
+                    s3.bucket: "{{inputs.parameters.s3Bucket}}"
+                    s3.region: "{{inputs.parameters.s3Region}}"
+                    s3.access.key: "{{inputs.parameters.s3AccessKey}}"
+                    s3.secret.key: "{{inputs.parameters.s3SecretKey}}"
+                    cluster-secret: "{{inputs.parameters.clusterSecret}}"
+
+            - name: apply-license-secret
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: licenseData
+                  - name: licenseSignature
+              resource:
+                action: apply
+                manifest: |
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: parseable-license
+                    namespace: "{{inputs.parameters.namespace}}"
+                  type: Opaque
+                  data:
+                    parseable_license.json: "{{inputs.parameters.licenseData}}"
+                    parseable_license.sig: "{{inputs.parameters.licenseSignature}}"
+
+            - name: apply-cluster
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+                  - name: region
+                  - name: instanceType
+                  - name: resourceId
+                  - name: parseableVersion
+                  - name: ingestorCount
+                  - name: querierCount
+                  - name: ingestorStagingSize
+              resource:
+                action: apply
+                successCondition: status.phase == Ready
+                manifest: |
+                  apiVersion: parseable.com/v1
+                  kind: ParseableCluster
+                  metadata:
+                    name: "{{inputs.parameters.instanceId}}"
+                    namespace: "{{inputs.parameters.namespace}}"
+                  spec:
+                    deploymentOrder:
+                      - query
+                      - ingestor
+                      - prism
+                    parseableConfig:
+                      - name: parseable
+                        secretName: parseable-env-secret
+                        cliArgs: []
+                    nodes:
+                      - name: parseable-query
+                        kind: statefulset
+                        type: query
+                        replicas: {{inputs.parameters.querierCount}}
+                        k8sConfig: parseable-query
+                        parseableConfig: parseable
+                      - name: parseable-ingestor
+                        kind: statefulset
+                        type: ingestor
+                        replicas: {{inputs.parameters.ingestorCount}}
+                        k8sConfig: parseable-ingestor
+                        parseableConfig: parseable
+                      - name: parseable-prism
+                        kind: statefulset
+                        type: prism
+                        replicas: 1
+                        k8sConfig: parseable-prism
+                        parseableConfig: parseable
+                    k8sConfig:
+                      - name: parseable-query
+                        image: "quay.io/parseablehq/parseable-enterprise:{{inputs.parameters.parseableVersion}}"
+                        imagePullPolicy: IfNotPresent
+                        labels:
+                          omnistrate.com/include-customer-billing: "true"
+                        env:
+                          - name: HOSTNAME
+                            valueFrom:
+                              fieldRef:
+                                fieldPath: metadata.name
+                          - name: P_MODE
+                            value: query
+                          - name: P_STAGING_DIR
+                            value: /parseable/staging
+                          - name: P_HOT_TIER_DIR
+                            value: /parseable/hot-tier
+                          - name: P_MAX_DISK_USAGE_PERCENT
+                            value: "95.0"
+                          - name: P_CHECK_UPDATE
+                            value: "false"
+                          - name: RUST_LOG
+                            value: warn
+                          - name: P_CLUSTER_SECRET
+                            valueFrom:
+                              secretKeyRef:
+                                name: parseable-env-secret
+                                key: cluster-secret
+                          - name: P_LICENSE_DATA_FILE_PATH
+                            value: /tmp/license/parseable_license.json
+                          - name: P_LICENSE_SIGNATURE_FILE_PATH
+                            value: /tmp/license/parseable_license.sig
+                        volume:
+                          - name: stage-volume
+                            emptyDir: {}
+                          - name: hot-tier
+                            emptyDir: {}
+                          - name: license
+                            secret:
+                              secretName: parseable-license
+                        volumeMount:
+                          - name: stage-volume
+                            mountPath: /parseable/staging
+                          - name: hot-tier
+                            mountPath: /parseable/hot-tier
+                          - name: license
+                            mountPath: /tmp/license
+                            readOnly: true
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 1Gi
+                          limits:
+                            cpu: 500m
+                            memory: 4Gi
+                        readinessProbe:
+                          httpGet:
+                            path: /api/v1/readiness
+                            port: 8000
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: omnistrate.com/managed-by
+                                      operator: In
+                                      values: [omnistrate]
+                                    - key: topology.kubernetes.io/region
+                                      operator: In
+                                      values: ["{{inputs.parameters.region}}"]
+                                    - key: node.kubernetes.io/instance-type
+                                      operator: In
+                                      values: ["{{inputs.parameters.instanceType}}"]
+                                    - key: omnistrate.com/resource
+                                      operator: In
+                                      values: ["{{inputs.parameters.resourceId}}"]
+                        service:
+                          - metadata:
+                              name: parseable-query-headless
+                            spec:
+                              clusterIP: None
+                              ports:
+                                - name: parseable-port
+                                  port: 8000
+                                  protocol: TCP
+                          - metadata:
+                              name: parseable-query-service
+                            spec:
+                              type: ClusterIP
+                              ports:
+                                - name: http
+                                  port: 80
+                                  targetPort: 8000
+                                  protocol: TCP
+                      - name: parseable-ingestor
+                        image: "quay.io/parseablehq/parseable-enterprise:{{inputs.parameters.parseableVersion}}"
+                        imagePullPolicy: IfNotPresent
+                        labels:
+                          omnistrate.com/include-customer-billing: "true"
+                        env:
+                          - name: HOSTNAME
+                            valueFrom:
+                              fieldRef:
+                                fieldPath: metadata.name
+                          - name: P_MODE
+                            value: ingest
+                          - name: P_STAGING_DIR
+                            value: /parseable/staging
+                          - name: P_CHECK_UPDATE
+                            value: "false"
+                          - name: RUST_LOG
+                            value: warn
+                          - name: P_CLUSTER_SECRET
+                            valueFrom:
+                              secretKeyRef:
+                                name: parseable-env-secret
+                                key: cluster-secret
+                          - name: P_LICENSE_DATA_FILE_PATH
+                            value: /tmp/license/parseable_license.json
+                          - name: P_LICENSE_SIGNATURE_FILE_PATH
+                            value: /tmp/license/parseable_license.sig
+                        volume:
+                          - name: license
+                            secret:
+                              secretName: parseable-license
+                        volumeMount:
+                          - name: stage-volume
+                            mountPath: /parseable/staging
+                          - name: license
+                            mountPath: /tmp/license
+                            readOnly: true
+                        volumeClaimTemplate:
+                          - metadata:
+                              name: stage-volume
+                            spec:
+                              accessModes: [ReadWriteOnce]
+                              storageClassName: gp3
+                              resources:
+                                requests:
+                                  storage: "{{inputs.parameters.ingestorStagingSize}}"
+                        resources:
+                          requests:
+                            cpu: 250m
+                            memory: 1Gi
+                          limits:
+                            cpu: 500m
+                            memory: 4Gi
+                        readinessProbe:
+                          httpGet:
+                            path: /api/v1/readiness
+                            port: 8000
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: omnistrate.com/managed-by
+                                      operator: In
+                                      values: [omnistrate]
+                                    - key: topology.kubernetes.io/region
+                                      operator: In
+                                      values: ["{{inputs.parameters.region}}"]
+                                    - key: node.kubernetes.io/instance-type
+                                      operator: In
+                                      values: ["{{inputs.parameters.instanceType}}"]
+                                    - key: omnistrate.com/resource
+                                      operator: In
+                                      values: ["{{inputs.parameters.resourceId}}"]
+                        service:
+                          - metadata:
+                              name: parseable-ingestor-headless
+                            spec:
+                              clusterIP: None
+                              ports:
+                                - name: parseable-port
+                                  port: 8000
+                                  protocol: TCP
+                          - metadata:
+                              name: parseable-ingestor-service
+                            spec:
+                              type: ClusterIP
+                              ports:
+                                - name: http
+                                  port: 80
+                                  targetPort: 8000
+                                  protocol: TCP
+                      - name: parseable-prism
+                        image: "quay.io/parseablehq/parseable-enterprise:{{inputs.parameters.parseableVersion}}"
+                        imagePullPolicy: IfNotPresent
+                        labels:
+                          omnistrate.com/include-customer-billing: "true"
+                        env:
+                          - name: HOSTNAME
+                            valueFrom:
+                              fieldRef:
+                                fieldPath: metadata.name
+                          - name: P_MODE
+                            value: prism
+                          - name: P_STAGING_DIR
+                            value: /parseable/staging
+                          - name: P_PROMQL_RESULTS_CACHE_DIR
+                            value: /parseable/promql-cache
+                          - name: P_CHECK_UPDATE
+                            value: "false"
+                          - name: RUST_LOG
+                            value: warn
+                          - name: P_CLUSTER_SECRET
+                            valueFrom:
+                              secretKeyRef:
+                                name: parseable-env-secret
+                                key: cluster-secret
+                          - name: P_LICENSE_DATA_FILE_PATH
+                            value: /tmp/license/parseable_license.json
+                          - name: P_LICENSE_SIGNATURE_FILE_PATH
+                            value: /tmp/license/parseable_license.sig
+                        volume:
+                          - name: stage-volume
+                            emptyDir: {}
+                          - name: promql-cache
+                            emptyDir: {}
+                          - name: license
+                            secret:
+                              secretName: parseable-license
+                        volumeMount:
+                          - name: stage-volume
+                            mountPath: /parseable/staging
+                          - name: promql-cache
+                            mountPath: /parseable/promql-cache
+                          - name: license
+                            mountPath: /tmp/license
+                            readOnly: true
+                        resources:
+                          requests:
+                            cpu: 500m
+                            memory: 1Gi
+                          limits:
+                            cpu: "1"
+                            memory: 2Gi
+                        readinessProbe:
+                          httpGet:
+                            path: /api/v1/readiness
+                            port: 8000
+                        affinity:
+                          nodeAffinity:
+                            requiredDuringSchedulingIgnoredDuringExecution:
+                              nodeSelectorTerms:
+                                - matchExpressions:
+                                    - key: omnistrate.com/managed-by
+                                      operator: In
+                                      values: [omnistrate]
+                                    - key: topology.kubernetes.io/region
+                                      operator: In
+                                      values: ["{{inputs.parameters.region}}"]
+                                    - key: node.kubernetes.io/instance-type
+                                      operator: In
+                                      values: ["{{inputs.parameters.instanceType}}"]
+                                    - key: omnistrate.com/resource
+                                      operator: In
+                                      values: ["{{inputs.parameters.resourceId}}"]
+                        service:
+                          - metadata:
+                              name: parseable-prism-headless
+                            spec:
+                              clusterIP: None
+                              ports:
+                                - name: parseable-port
+                                  port: 8000
+                                  protocol: TCP
+                          - metadata:
+                              name: parseable-prism-service
+                            spec:
+                              type: ClusterIP
+                              ports:
+                                - name: http
+                                  port: 80
+                                  targetPort: 8000
+                                  protocol: TCP
+
+            - name: apply-ui-ingress
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: uiHost
+              resource:
+                action: apply
+                manifest: |
+                  apiVersion: networking.k8s.io/v1
+                  kind: Ingress
+                  metadata:
+                    name: parseable-ui
+                    namespace: "{{inputs.parameters.namespace}}"
+                    annotations:
+                      nginx.org/proxy-read-timeout: "300s"
+                      nginx.org/proxy-send-timeout: "300s"
+                      nginx.org/client-max-body-size: "0"
+                  spec:
+                    ingressClassName: nginx
+                    tls:
+                      - hosts: ["{{inputs.parameters.uiHost}}"]
+                        secretName: google-public-ca-tls
+                    rules:
+                      - host: "{{inputs.parameters.uiHost}}"
+                        http:
+                          paths:
+                            - path: /
+                              pathType: Prefix
+                              backend:
+                                service:
+                                  name: parseable-prism-service
+                                  port:
+                                    number: 80
+
+            - name: apply-ingest-ingress
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: ingestHost
+              resource:
+                action: apply
+                manifest: |
+                  apiVersion: networking.k8s.io/v1
+                  kind: Ingress
+                  metadata:
+                    name: parseable-ingest
+                    namespace: "{{inputs.parameters.namespace}}"
+                    annotations:
+                      nginx.org/proxy-read-timeout: "300s"
+                      nginx.org/proxy-send-timeout: "300s"
+                      nginx.org/client-max-body-size: "0"
+                  spec:
+                    ingressClassName: nginx
+                    tls:
+                      - hosts: ["{{inputs.parameters.ingestHost}}"]
+                        secretName: google-public-ca-tls
+                    rules:
+                      - host: "{{inputs.parameters.ingestHost}}"
+                        http:
+                          paths:
+                            - path: /
+                              pathType: Prefix
+                              backend:
+                                service:
+                                  name: parseable-ingestor-service
+                                  port:
+                                    number: 80
+
+      # Same DAG as create: re-applies secrets, the CR and the Ingresses with
+      # the current parameter values under the same CR name.
+      modify:
+        outputParameters:
+          phase: "$tasks.applycluster.resource.status.phase"
+          readyReplicas: "$tasks.applycluster.resource.status.readyReplicas"
+        workflow: *applyWorkflow
+
+      # Operator-native quiesce: the parseable.com/workspace annotation scales
+      # every StatefulSet to 0 and remembers the original replica counts.
+      stop:
+        workflow:
+          entrypoint: stop
+          arguments:
+            parameters:
+              - name: namespace
+                value: "{{ $sys.namespace }}"
+              - name: instanceId
+                value: "{{ $sys.instanceId }}"
+          templates:
+            - name: stop
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+              dag:
+                tasks:
+                  - name: suspendcluster
+                    template: suspend-cluster
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: instanceId
+                          value: "{{inputs.parameters.instanceId}}"
+            - name: suspend-cluster
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+              resource:
+                action: patch
+                mergeStrategy: merge
+                successCondition: status.phase == Suspended
+                manifest: |
+                  apiVersion: parseable.com/v1
+                  kind: ParseableCluster
+                  metadata:
+                    name: "{{inputs.parameters.instanceId}}"
+                    namespace: "{{inputs.parameters.namespace}}"
+                    annotations:
+                      parseable.com/workspace: suspend
+
+      # Resume restores the stored replica counts; the operator then removes
+      # the annotation itself.
+      start:
+        workflow:
+          entrypoint: start
+          arguments:
+            parameters:
+              - name: namespace
+                value: "{{ $sys.namespace }}"
+              - name: instanceId
+                value: "{{ $sys.instanceId }}"
+          templates:
+            - name: start
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+              dag:
+                tasks:
+                  - name: resumecluster
+                    template: resume-cluster
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: instanceId
+                          value: "{{inputs.parameters.instanceId}}"
+            - name: resume-cluster
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+              resource:
+                action: patch
+                mergeStrategy: merge
+                successCondition: status.phase == Ready
+                manifest: |
+                  apiVersion: parseable.com/v1
+                  kind: ParseableCluster
+                  metadata:
+                    name: "{{inputs.parameters.instanceId}}"
+                    namespace: "{{inputs.parameters.namespace}}"
+                    annotations:
+                      parseable.com/workspace: resume
+
+      # CR first (its finalizer removes StatefulSets before PVCs), then the
+      # Ingresses and secrets. The S3 bucket is destroyed with parseableStorage.
+      delete:
+        workflow:
+          entrypoint: delete
+          arguments:
+            parameters:
+              - name: namespace
+                value: "{{ $sys.namespace }}"
+              - name: instanceId
+                value: "{{ $sys.instanceId }}"
+          templates:
+            - name: delete
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+              dag:
+                tasks:
+                  - name: deleteuiingress
+                    template: delete-ui-ingress
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                  - name: deleteingestingress
+                    template: delete-ingest-ingress
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                  - name: deletecluster
+                    template: delete-cluster
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                        - name: instanceId
+                          value: "{{inputs.parameters.instanceId}}"
+                  - name: deleteenvsecret
+                    template: delete-env-secret
+                    dependencies:
+                      - deletecluster
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+                  - name: deletelicense
+                    template: delete-license-secret
+                    dependencies:
+                      - deletecluster
+                    arguments:
+                      parameters:
+                        - name: namespace
+                          value: "{{inputs.parameters.namespace}}"
+            - name: delete-ui-ingress
+              inputs:
+                parameters:
+                  - name: namespace
+              resource:
+                action: delete
+                flags: ["--ignore-not-found"]
+                manifest: |
+                  apiVersion: networking.k8s.io/v1
+                  kind: Ingress
+                  metadata:
+                    name: parseable-ui
+                    namespace: "{{inputs.parameters.namespace}}"
+            - name: delete-ingest-ingress
+              inputs:
+                parameters:
+                  - name: namespace
+              resource:
+                action: delete
+                flags: ["--ignore-not-found"]
+                manifest: |
+                  apiVersion: networking.k8s.io/v1
+                  kind: Ingress
+                  metadata:
+                    name: parseable-ingest
+                    namespace: "{{inputs.parameters.namespace}}"
+            - name: delete-cluster
+              inputs:
+                parameters:
+                  - name: namespace
+                  - name: instanceId
+              resource:
+                action: delete
+                flags: ["--ignore-not-found", "--wait=true"]
+                manifest: |
+                  apiVersion: parseable.com/v1
+                  kind: ParseableCluster
+                  metadata:
+                    name: "{{inputs.parameters.instanceId}}"
+                    namespace: "{{inputs.parameters.namespace}}"
+            - name: delete-env-secret
+              inputs:
+                parameters:
+                  - name: namespace
+              resource:
+                action: delete
+                flags: ["--ignore-not-found"]
+                manifest: |
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: parseable-env-secret
+                    namespace: "{{inputs.parameters.namespace}}"
+            - name: delete-license-secret
+              inputs:
+                parameters:
+                  - name: namespace
+              resource:
+                action: delete
+                flags: ["--ignore-not-found"]
+                manifest: |
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: parseable-license
+                    namespace: "{{inputs.parameters.namespace}}"

@@ -107,6 +107,7 @@ type ParseableClusterAutoscalerStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=pbca;pbcas
 
 // ParseableClusterAutoscaler is the Schema for the parseableclusterautoscalers API.
 // It represents a custom resource for managing autoscaling behavior in a Kubernetes cluster.

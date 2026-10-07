@@ -88,10 +88,32 @@ type ParseableClusterStatus struct {
 	EnableAutoscaling bool              `json:"enableAutoscaling,omitempty"`
 	IngestorIndex     map[string]string `json:"ingestorIndex,omitempty"`
 	IsScaling         bool              `json:"isScaling,omitempty"`
+
+	// Phase summarises cluster readiness: Progressing, Ready or Suspended.
+	Phase ClusterPhase `json:"phase,omitempty"`
+	// Replicas is the desired pod count summed across all owned StatefulSets.
+	Replicas int32 `json:"replicas,omitempty"`
+	// ReadyReplicas is the ready pod count summed across all owned StatefulSets.
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+	// ObservedGeneration is the CR generation the status was computed for.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
+
+type ClusterPhase string
+
+const (
+	ClusterPhaseProgressing ClusterPhase = "Progressing"
+	ClusterPhaseReady       ClusterPhase = "Ready"
+	ClusterPhaseSuspended   ClusterPhase = "Suspended"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.status.replicas`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:resource:shortName=pbc;pbcs
 
 // ParseableCluster is the Schema for the parseableclusters API
 type ParseableCluster struct {

@@ -60,10 +60,11 @@ func NewParseableClusterAutoscalerReconciler(mgr ctrl.Manager) *ParseableCluster
 	}
 }
 
-// +kubebuilder:rbac:groups=parseable.com,resources=parseableclustersautosaclers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=parseable.com,resources=parseableclustersautoscalers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=parseable.com,resources=parseableclustersautoscalers/finalizers,verbs=update
-// +kubebuilder:resource:shortNames=pbca;pbcas
+// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterautoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterautoscalers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterautoscalers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=metrics.k8s.io,resources=nodes;pods,verbs=get;list
+
 func (r *ParseableClusterAutoscalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logr := log.FromContext(ctx)
 

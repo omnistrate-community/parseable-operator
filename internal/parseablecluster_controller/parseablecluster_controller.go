@@ -52,7 +52,13 @@ func NewParseableClusterReconciler(mgr ctrl.Manager) *ParseableClusterReconciler
 // +kubebuilder:rbac:groups=parseable.com,resources=parseableclusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=parseable.com,resources=parseableclusters/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=parseable.com,resources=parseableclusters/finalizers,verbs=update
-// +kubebuilder:resource:shortNames=pbc;pbcs
+// +kubebuilder:rbac:groups=apps,resources=statefulsets;deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;pods;persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;list;watch;create;update;patch;delete
+
 func (r *ParseableClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logr := log.FromContext(ctx)
 
@@ -68,9 +74,15 @@ func (r *ParseableClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.do(ctx, parseableCR); err != nil {
 		logr.Error(err, err.Error())
 		return ctrl.Result{}, err
-	} else {
-		return ctrl.Result{RequeueAfter: r.ReconcileWait}, nil
 	}
+
+	if parseableCR.GetDeletionTimestamp() == nil {
+		if err := r.updateStatus(ctx, parseableCR); err != nil {
+			logr.Error(err, "failed to update status")
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: r.ReconcileWait}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

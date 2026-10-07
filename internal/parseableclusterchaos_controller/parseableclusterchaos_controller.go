@@ -58,10 +58,11 @@ func NewParseableClusterChaosReconciler(mgr ctrl.Manager) *ParseableClusterChaos
 	}
 }
 
-// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterschaos,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterschaos/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterschaos/finalizers,verbs=update
-// +kubebuilder:resource:shortNames=pbcc;pbccs
+// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterchaos,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterchaos/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=parseable.com,resources=parseableclusterchaos/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch;delete
+
 func (r *ParseableClusterChaosReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logr := log.FromContext(ctx)
 

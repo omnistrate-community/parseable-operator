@@ -1,0 +1,33 @@
+# customAmenities entry installing the parseable-operator (CRDs + controller)
+# once per deployment cell. Merge this into the AWS organization-level
+# deployment-cell template so every new BYOC cell gets it before an instance
+# lands there:
+#
+#   omnistrate-ctl deployment-cell generate-config-template --cloud aws > cell-aws.yaml
+#   # merge the customAmenities entry below into cell-aws.yaml
+#   omnistrate-ctl deployment-cell update-config-template --environment GLOBAL --cloud aws -f cell-aws.yaml
+#
+# Existing cells: update-config-template --id <cell-id> --sync-with-template,
+# then apply-pending-changes -i <cell-id> --force.
+customAmenities:
+  - name: parseable-operator
+    description: Parseable operator (ParseableCluster CRDs + controller), installed once per deployment cell.
+    type: Helm
+    properties:
+      ChartName: parseable-operator
+      ChartVersion: 0.1.0
+      ChartRepoName: parseablehq
+      ChartRepoURL: oci://quay.io/parseablehq/charts
+      DefaultNamespace: parseable-system
+      ChartValues:
+        priorityClassName: system-cluster-critical
+        affinity:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: omnistrate.com/control-plane
+                      operator: Exists
+        tolerations:
+          - key: CriticalAddonsOnly
+            operator: Exists
